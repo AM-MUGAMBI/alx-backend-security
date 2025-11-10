@@ -38,8 +38,16 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'ip_tracking',
+    'ratelimit',
+
   
 ]
+# settings.py
+
+# Default rate limit rules
+RATELIMIT_DEFAULT = '5/m'  # fallback rule
+RATELIMIT_ENABLE = True
+
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
