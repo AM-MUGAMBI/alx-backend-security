@@ -1,52 +1,55 @@
-from django.http import HttpResponseForbidden
+import logging
+from django.utils import timezone
+from ipgeolocation import IPGeolocation
 from django.core.cache import cache
-from ipgeolocation import IPGeolocationAPI
-from .models import RequestLog, BlockedIP
+from .models import RequestLog
 
-# Initialize IPGeolocation API
-geo_api = IPGeolocationAPI()
+logger = logging.getLogger(__name__)
+geo = IPGeolocation()
 
-class RequestLoggingMiddleware:
+class IPTrackingMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
-        # Get client IP
-        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
-        if x_forwarded_for:
-            ip = x_forwarded_for.split(',')[0]
-        else:
-            ip = request.META.get('REMOTE_ADDR')
+        response = self.get_response(request)
+        self.log_request(request)
+        return response
 
-        # Block if IP is blacklisted
-        if BlockedIP.objects.filter(ip_address=ip).exists():
-            return HttpResponseForbidden("Access denied: Your IP address has been blocked.")
+    def log_request(self, request):
+        ip = self.get_client_ip(request)
+        if not ip:
+            return
 
-        # Check cache for geo info
+        # Cache key for 24 hours
         cache_key = f"geo_{ip}"
         geo_data = cache.get(cache_key)
 
         if not geo_data:
             try:
-                geo_response = geo_api.get_geolocation(ip)
+                geo_info = geo.lookup(ip)
                 geo_data = {
-                    "country": geo_response.get("country_name", ""),
-                    "city": geo_response.get("city", "")
+                    'country': geo_info.get('country_name', ''),
+                    'city': geo_info.get('city', ''),
                 }
-                # Cache for 24 hours (86400 seconds)
-                cache.set(cache_key, geo_data, 86400)
+                cache.set(cache_key, geo_data, 60 * 60 * 24)  # 24 hours
             except Exception as e:
-                geo_data = {"country": "", "city": ""}
-                print(f"Geolocation lookup failed for {ip}: {e}")
+                logger.warning(f"Geo lookup failed for {ip}: {e}")
+                geo_data = {'country': '', 'city': ''}
 
-        # Log request
         RequestLog.objects.create(
             ip_address=ip,
             path=request.path,
-            country=geo_data["country"],
-            city=geo_data["city"],
+            method=request.method,
+            timestamp=timezone.now(),
+            country=geo_data['country'],
+            city=geo_data['city'],
         )
 
-        # Continue with response
-        response = self.get_response(request)
-        return response
+    def get_client_ip(self, request):
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(',')[0]
+        else:
+            ip = request.META.get('REMOTE_ADDR')
+        return ip
